@@ -53,8 +53,8 @@ Building enterprise-grade distributed workflow systems presents three classical 
 ```mermaid
 flowchart TD
     subgraph IngressLayer ["1. Ingress & Cryptographic Admission"]
-        VendorHook["External SaaS Webhooks\n(Workday, Salesforce, Jira)"] -->|HMAC-SHA256 Signed POST| IngressFilter["Cryptographic Ingress Gate\n(Constant-Time Digest Match)"]
-        OpsConsole["Operations Diagnostic Console\n(React 18 + TypeScript)"] -->|REST / JWT Bearer Auth| SecFilter["Spring Security 6.x\n(RBAC / ABAC Role Gate)"]
+        VendorHook["External SaaS Webhooks (Workday, Salesforce, Jira)"] -->|"HMAC-SHA256 Signed POST"| IngressFilter["Cryptographic Ingress Gate (Constant-Time Match)"]
+        OpsConsole["Operations Diagnostic Console (React 18 + TS)"] -->|"REST / JWT Bearer Auth"| SecFilter["Spring Security 6.x (RBAC Gate)"]
     end
 
     subgraph CorePlatform ["2. Core Workflow Engine (Spring Boot 3.3 / Java 21)"]
@@ -62,27 +62,29 @@ flowchart TD
         SecFilter --> WorkflowCtrl["Workflow Transition Controller"]
         
         subgraph FSM ["Deterministic Finite State Machine (FSM)"]
-            WorkflowCtrl & WebhookSvc --> FSMEngine["FSM State Transition Engine\nOptimistic Concurrency: @Version"]
-            SLAWatchdog["SLA Escalation Scheduler\n(60s Background Poller)"] --> FSMEngine
+            WorkflowCtrl --> FSMEngine["FSM State Transition Engine (Optimistic Lock: @Version)"]
+            WebhookSvc --> FSMEngine
+            SLAWatchdog["SLA Escalation Scheduler (60s Poller)"] --> FSMEngine
         end
 
         subgraph OutboxEngine ["Transactional Outbox Pipeline"]
-            FSMEngine -->|Atomic DB Transaction| OutboxTable[("PostgreSQL: outbox_events\n(Pending Dispatch Queue)")]
-            OutboxWorker["Asynchronous Outbox Dispatcher\n(Java 21 Virtual Threads)"] --> OutboxTable
-            OutboxWorker --> ResilientDispatcher["Resilience4j Circuit Breaker\n(Exponential Backoff + Jitter)"]
+            FSMEngine -->|"Atomic DB Transaction"| OutboxTable[("PostgreSQL: outbox_events")]
+            OutboxWorker["Asynchronous Outbox Dispatcher (Virtual Threads)"] --> OutboxTable
+            OutboxWorker --> ResilientDispatcher["Resilience4j Circuit Breaker (Exponential Backoff)"]
         end
     end
 
     subgraph ExternalAndDLQ ["3. Fault-Tolerance & DLQ Quarantine"]
-        ResilientDispatcher -->|HTTP 2xx Success| TargetVendor["Target Internal / External Service"]
-        ResilientDispatcher -->|Max Retries (k=5) Exceeded| DLQTable[("PostgreSQL: dead_letter_events\n(Quarantine Isolation)")]
-        OpsConsole -->|1-Click Manual Replay Trigger| DLQReplayer["DLQ Replay Engine\n(Re-queue to Outbox)"]
+        ResilientDispatcher -->|"HTTP 2xx Success"| TargetVendor["Target External Service"]
+        ResilientDispatcher -->|"Max Retries Exceeded"| DLQTable[("PostgreSQL: dead_letter_events")]
+        OpsConsole -->|"1-Click Manual Replay"| DLQReplayer["DLQ Replay Engine"]
         DLQReplayer --> OutboxTable
     end
 
     subgraph AuditStore ["4. Compliance & Audit Layer"]
-        FSMEngine & DLQReplayer --> AuditAspect["Spring AOP @Auditable Aspect"]
-        AuditAspect --> AuditLedger[("Immutable Audit Ledger\n(Actor, State Diff, IP, Timestamp)")]
+        FSMEngine --> AuditAspect["Spring AOP @Auditable Aspect"]
+        DLQReplayer --> AuditAspect
+        AuditAspect --> AuditLedger[("Immutable Audit Ledger (Actor, Diffs, IP)")]
     end
 ```
 
@@ -95,17 +97,17 @@ A workflow instance $W$ is defined by a 5-tuple:
 
 $$M = \langle \mathcal{S}, \, \Sigma, \, \delta, \, s_0, \, \mathcal{F} \rangle$$
 
-* $\mathcal{S} = \{\text{DRAFT}, \text{SUBMITTED}, \text{IN\_PROGRESS}, \text{PENDING\_APPROVAL}, \text{APPROVED}, \text{REJECTED}, \text{ESCALATED}, \text{CANCELLED}, \text{COMPLETED}\}$
-* $\Sigma = \{\text{SUBMIT}, \text{APPROVE}, \text{REJECT}, \text{ESCALATE}, \text{CANCEL}, \text{COMPLETE}\}$
+* $\mathcal{S} = \{\mathrm{DRAFT}, \, \mathrm{SUBMITTED}, \, \mathrm{IN\_PROGRESS}, \, \mathrm{PENDING\_APPROVAL}, \, \mathrm{APPROVED}, \, \mathrm{REJECTED}, \, \mathrm{ESCALATED}, \, \mathrm{CANCELLED}, \, \mathrm{COMPLETED}\}$
+* $\Sigma = \{\mathrm{SUBMIT}, \, \mathrm{APPROVE}, \, \mathrm{REJECT}, \, \mathrm{ESCALATE}, \, \mathrm{CANCEL}, \, \mathrm{COMPLETE}\}$
 * $\delta: \mathcal{S} \times \Sigma \to \mathcal{S}$ is the deterministic transition function:
 
 $$\delta(s, e) = \begin{cases}
-\text{IN\_PROGRESS}, & \text{if } s = \text{DRAFT} \land e = \text{SUBMIT} \\
-\text{APPROVED}, & \text{if } s \in \{\text{IN\_PROGRESS}, \text{PENDING\_APPROVAL}\} \land e = \text{APPROVE} \land \text{IsFinalStep}(W) \\
-\text{PENDING\_APPROVAL}, & \text{if } s \in \{\text{IN\_PROGRESS}, \text{PENDING\_APPROVAL}\} \land e = \text{APPROVE} \land \neg \text{IsFinalStep}(W) \\
-\text{REJECTED}, & \text{if } s \notin \mathcal{F} \land e = \text{REJECT} \\
-\text{ESCALATED}, & \text{if } s \notin \mathcal{F} \land e = \text{ESCALATE} \\
-\perp, & \text{otherwise (Throws } \text{WorkflowTransitionException})
+\mathrm{IN\_PROGRESS}, & \text{if } s = \mathrm{DRAFT} \land e = \mathrm{SUBMIT} \\
+\mathrm{APPROVED}, & \text{if } s \in \{\mathrm{IN\_PROGRESS}, \, \mathrm{PENDING\_APPROVAL}\} \land e = \mathrm{APPROVE} \land \mathrm{IsFinalStep}(W) \\
+\mathrm{PENDING\_APPROVAL}, & \text{if } s \in \{\mathrm{IN\_PROGRESS}, \, \mathrm{PENDING\_APPROVAL}\} \land e = \mathrm{APPROVE} \land \neg \mathrm{IsFinalStep}(W) \\
+\mathrm{REJECTED}, & \text{if } s \notin \mathcal{F} \land e = \mathrm{REJECT} \\
+\mathrm{ESCALATED}, & \text{if } s \notin \mathcal{F} \land e = \mathrm{ESCALATE} \\
+\perp, & \text{otherwise}
 \end{cases}$$
 
 ---
